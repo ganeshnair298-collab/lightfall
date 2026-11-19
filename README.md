@@ -6,7 +6,7 @@
 
 ![Electron](https://img.shields.io/badge/Electron-45.3.4-47848F?logo=electron&logoColor=white)
 ![Node.js](https://img.shields.io/badge/Node.js-18+-339933?logo=nodedotjs&logoColor=white)
-![Platform](https://img.shields.io/badge/Platform-All-0078D4?logo=windows&logoColor=white)
+![Platform](https://img.shields.io/badge/Platform-Windows-0078D4?logo=windows&logoColor=white)
 ![License](https://img.shields.io/badge/License-MIT-yellow.svg)
 
 [Features](#features) • [Quick Start](#quick-start) • [How to Use](#how-to-use) • [Architecture](#architecture) • [Current Limitations](#current-limitations) • [Contributing](#contributing)
