@@ -30,6 +30,7 @@ The interface stays minimal until you need it: hover over the top-edge island to
 - **Dynamic expansion** with smooth, responsive hover animations
 - **Compact mini-player** for discreet playback and progress tracking
 - **Charging pop-ups** with clear power-state notifications
+- **Camera activity pop-ups** when an app starts or stops using the webcam
 - **Adaptive battery indicator** with charging status
 - **Frameless, transparent, always-on-top window**
 
@@ -66,6 +67,7 @@ Lightfall uses the native HTML audio engine and supports the file types offered 
 ### Desktop and system integration
 
 - Windows battery level and charging-state integration
+- Live Windows camera-use monitoring with application names and island notifications
 - Power monitor notifications for AC/battery transitions
 - Screen-centered, top-aligned window
 - Windows content protection for the app window
@@ -124,7 +126,7 @@ Electron Forge output is generated in the platform-specific `out/` directory.
 
 ```text
 src/
-├── main.js       # Electron lifecycle, window, IPC, metadata, battery, capture
+├── main.js       # Electron lifecycle, window, IPC, metadata, battery, camera activity, capture
 ├── preload.js    # Secure context bridge for renderer APIs
 ├── index.html    # Player structure
 ├── index.css     # Dynamic Island and liquid-glass styling

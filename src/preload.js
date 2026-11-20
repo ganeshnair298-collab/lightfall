@@ -41,6 +41,15 @@ contextBridge.exposeInMainWorld("lightfall", {
       ipcRenderer.removeListener("battery:charger-disconnected", listener);
     };
   },
+  onMediaActivity(callback) {
+    const listener = (_, activity) => callback(activity);
+
+    ipcRenderer.on("media:activity", listener);
+
+    return () => {
+      ipcRenderer.removeListener("media:activity", listener);
+    };
+  },
   requestBatteryStatus() {
     ipcRenderer.send("battery:refresh");
   },

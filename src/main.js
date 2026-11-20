@@ -17,6 +17,9 @@ const { pathToFileURL } = require("node:url");
 let mainWindow;
 let captureTimer;
 let batteryTimer;
+let mediaActivityTimer;
+let mediaActivityRefreshInProgress = false;
+let previousMediaActivity = null;
 let batteryRefreshInProgress = false;
 let batteryRefreshPending = false;
 let pendingPowerEvent = null;
@@ -30,6 +33,132 @@ function notifyPowerState(eventName) {
     pendingPowerEvent = eventName;
   } else {
     mainWindow.webContents.send(eventName);
+  }
+}
+
+function getActiveMediaApps(output, registryRoot) {
+  const activeApps = new Set();
+  let keyPath = null;
+  let startTime = null;
+  let stopTime = 0n;
+
+  const addActiveApp = () => {
+    if (!keyPath || startTime === null || startTime <= stopTime) {
+      return;
+    }
+
+    const relativePath = keyPath.slice(registryRoot.length).replace(/^\\/, "");
+    const appPath = relativePath.startsWith("NonPackaged\\")
+      ? relativePath.slice("NonPackaged\\".length).replace(/#/g, "\\")
+      : null;
+    const appName = appPath
+      ? path.basename(appPath, path.extname(appPath))
+      : relativePath.split("\\")[0].split("_")[0];
+
+    if (appName) {
+      activeApps.add(appName);
+    }
+  };
+
+  output.split(/\r?\n/).forEach((line) => {
+    const trimmedLine = line.trim();
+    if (!trimmedLine) {
+      addActiveApp();
+      keyPath = null;
+      startTime = null;
+      stopTime = 0n;
+      return;
+    }
+
+    if (trimmedLine.startsWith("HKEY_CURRENT_USER\\")) {
+      addActiveApp();
+      keyPath = trimmedLine;
+      startTime = null;
+      stopTime = 0n;
+      return;
+    }
+
+    const match = trimmedLine.match(/^(LastUsedTimeStart|LastUsedTimeStop)\s+REG_QWORD\s+0x([0-9a-f]+)$/i);
+    if (match) {
+      const timestamp = BigInt(`0x${match[2]}`);
+      if (match[1] === "LastUsedTimeStart") {
+        startTime = timestamp;
+      } else {
+        stopTime = timestamp;
+      }
+    }
+  });
+
+  addActiveApp();
+  return activeApps;
+}
+
+function refreshMediaActivity() {
+  if (process.platform !== "win32" || mediaActivityRefreshInProgress) {
+    return;
+  }
+
+  mediaActivityRefreshInProgress = true;
+  const registryBase = "HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\CapabilityAccessManager\\ConsentStore";
+  const registryRoots = {
+    camera: `${registryBase}\\webcam`,
+    microphone: `${registryBase}\\microphone`
+  };
+  const current = { camera: new Set(), microphone: new Set() };
+  let completedQueries = 0;
+  let queryFailed = false;
+
+  const completeQuery = () => {
+    completedQueries += 1;
+    if (completedQueries !== Object.keys(registryRoots).length) {
+      return;
+    }
+
+    mediaActivityRefreshInProgress = false;
+    if (queryFailed || !mainWindow || mainWindow.isDestroyed()) {
+      return;
+    }
+
+    for (const type of ["camera", "microphone"]) {
+      const activeApps = current[type];
+      const previousApps = previousMediaActivity?.[type] || new Set();
+      const addedApps = [...activeApps].filter((appName) => !previousApps.has(appName));
+      const removedApps = [...previousApps].filter((appName) => !activeApps.has(appName));
+
+      if (addedApps.length > 0) {
+        mainWindow.webContents.send("media:activity", {
+          type,
+          active: true,
+          apps: addedApps
+        });
+      } else if (removedApps.length > 0 && activeApps.size === 0) {
+        mainWindow.webContents.send("media:activity", {
+          type,
+          active: false,
+          apps: removedApps
+        });
+      }
+    }
+
+    previousMediaActivity = current;
+  };
+
+  for (const [type, registryRoot] of Object.entries(registryRoots)) {
+    execFile(
+      "reg.exe",
+      ["query", registryRoot, "/s"],
+      { windowsHide: true, timeout: 3000, maxBuffer: 1024 * 1024 },
+      (error, stdout) => {
+        if (error) {
+          queryFailed = true;
+          console.error(`Media activity check error (${type}):`, error);
+        } else {
+          current[type] = getActiveMediaApps(stdout, registryRoot);
+        }
+
+        completeQuery();
+      }
+    );
   }
 }
 
@@ -666,6 +795,8 @@ function createWindow() {
   mainWindow.webContents.once("did-finish-load", () => {
     captureTimer = setInterval(captureDesktop, 100);
     batteryTimer = setInterval(refreshBatteryStatus, 10000);
+    mediaActivityTimer = setInterval(refreshMediaActivity, 500);
+    refreshMediaActivity();
     refreshBatteryStatus();
     if (pendingPowerEvent) {
       const eventName = pendingPowerEvent;
@@ -677,6 +808,7 @@ function createWindow() {
   mainWindow.on("closed", () => {
     clearInterval(captureTimer);
     clearInterval(batteryTimer);
+    clearInterval(mediaActivityTimer);
     mainWindow = null;
   });
 }
@@ -743,6 +875,7 @@ app.whenReady().then(() => {
 app.on("before-quit", () => {
   clearInterval(captureTimer);
   clearInterval(batteryTimer);
+  clearInterval(mediaActivityTimer);
 });
 
 app.on("window-all-closed", () => {

@@ -315,6 +315,13 @@ window.lightfall.onChargerDisconnected(() => {
   showPowerPopup(latestBatteryLevel, false);
 });
 
+let activeMediaActivityPanel;
+let activeMediaActivityCleanup;
+
+window.lightfall.onMediaActivity((activity) => {
+  showMediaActivityPopup(activity);
+});
+
 const prefersReducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
 
 let activeChargingPanel;
@@ -328,7 +335,7 @@ function collapseInputRegionAfterAnimation() {
 
   if (island.matches(":hover")) {
     updateIslandInputRegion(true);
-  } else if (!activeChargingPanel) {
+  } else if (!activeChargingPanel && !activeMediaActivityPanel) {
     updateIslandInputRegion(false);
   }
 }
@@ -387,6 +394,130 @@ function animatePopup() {
 let activeChargingPercentage;
 let activePowerCaption;
 let activePowerTitle;
+
+function showMediaActivityPopup(activity) {
+  const active = activity.active === true;
+  const type = activity.type === "camera" ? "CAMERA" : "MICROPHONE";
+  const apps = Array.isArray(activity.apps) && activity.apps.length
+    ? activity.apps.join(", ")
+    : "An app";
+
+  if (activeMediaActivityCleanup) {
+    activeMediaActivityCleanup();
+  }
+
+  const mini = island.querySelector(".island-mini");
+  const popup = island.querySelector(".island-popup");
+  const previousStyles = {
+    width: island.style.width,
+    height: island.style.height,
+    borderRadius: island.style.borderRadius,
+    opacity: island.style.opacity
+  };
+  const previousMiniVisibility = mini.style.visibility;
+  const previousPopupVisibility = popup.style.visibility;
+
+  const panel = document.createElement("div");
+  panel.setAttribute("role", "status");
+  panel.setAttribute("aria-live", "assertive");
+  panel.style.cssText = "position:absolute;inset:0;z-index:3;display:flex;align-items:center;justify-content:center;gap:20px;padding:20px 28px;color:rgba(255,255,255,.96);pointer-events:none;opacity:0;transform:translateY(25px) scale(.82);";
+
+  const icon = document.createElement("div");
+  icon.setAttribute("aria-hidden", "true");
+  icon.textContent = activity.type === "camera" ? "◉" : "●";
+  icon.style.cssText = "width:64px;height:64px;flex-shrink:0;display:grid;place-items:center;border:1px solid rgba(255,255,255,.35);border-radius:50%;background:radial-gradient(circle,rgba(255,255,255,.22),rgba(255,255,255,.04));font-size:34px;text-shadow:0 0 18px rgba(255,255,255,.75);";
+
+  const message = document.createElement("div");
+  message.style.cssText = "min-width:0;display:flex;flex-direction:column;gap:5px;";
+
+  const caption = document.createElement("span");
+  caption.textContent = `${type} ${active ? "IN USE" : "USE ENDED"}`;
+  caption.style.cssText = "font-size:9px;font-weight:bold;letter-spacing:2px;color:rgba(255,255,255,.62);";
+
+  const title = document.createElement("strong");
+  title.textContent = active && activity.type === "camera"
+    ? "Camera is started using by this app"
+    : `${type} ACCESS ${active ? "DETECTED" : "STOPPED"}`;
+  title.style.cssText = "font-size:18px;letter-spacing:1px;line-height:1.2;text-shadow:0 2px 14px rgba(255,255,255,.22);";
+
+  const appDetails = document.createElement("span");
+  appDetails.textContent = `Application: ${apps}`;
+  appDetails.style.cssText = "font-size:11px;font-weight:bold;letter-spacing:.3px;color:rgba(255,255,255,.7);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;";
+
+  message.append(caption, title, appDetails);
+  panel.append(icon, message);
+  island.appendChild(panel);
+  activeMediaActivityPanel = panel;
+
+  mini.style.visibility = "hidden";
+  popup.style.visibility = "hidden";
+  island.style.width = "420px";
+  island.style.height = "150px";
+  island.style.borderRadius = "0 0 32px 32px";
+  island.style.opacity = "1";
+  updateIslandInputRegion(false);
+
+  const cleanup = () => {
+    if (activeMediaActivityPanel !== panel) {
+      return;
+    }
+
+    panel.remove();
+    activeMediaActivityPanel = null;
+    activeMediaActivityCleanup = null;
+    mini.style.visibility = previousMiniVisibility;
+    popup.style.visibility = previousPopupVisibility;
+    island.style.width = previousStyles.width;
+    island.style.height = previousStyles.height;
+    island.style.borderRadius = previousStyles.borderRadius;
+    island.style.opacity = previousStyles.opacity;
+    if (island.matches(":hover")) {
+      updateIslandInputRegion(true);
+    } else {
+      scheduleInputRegionCollapse();
+    }
+  };
+  activeMediaActivityCleanup = cleanup;
+
+  if (prefersReducedMotion.matches) {
+    panel.style.opacity = "1";
+    panel.style.transform = "translateY(0) scale(1)";
+    setTimeout(cleanup, 3000);
+    return;
+  }
+
+  island.animate(
+    [
+      { transform: "translateX(-50%) scale(.78)", opacity: 0.65 },
+      { transform: "translateX(-50%) scale(1.08)", opacity: 1, offset: 0.68 },
+      { transform: "translateX(-50%) scale(1)", opacity: 1 }
+    ],
+    { duration: 900, easing: "cubic-bezier(.16, 1, .3, 1)" }
+  );
+  panel.animate(
+    [
+      { opacity: 0, transform: "translateY(25px) scale(.82)" },
+      { opacity: 1, transform: "translateY(-4px) scale(1.04)", offset: 0.72 },
+      { opacity: 1, transform: "translateY(0) scale(1)" }
+    ],
+    { duration: 700, delay: 120, easing: "cubic-bezier(.16, 1, .3, 1)", fill: "forwards" }
+  );
+
+  setTimeout(() => {
+    if (activeMediaActivityPanel !== panel) {
+      return;
+    }
+
+    const dismissal = panel.animate(
+      [
+        { opacity: 1, transform: "translateY(0) scale(1)" },
+        { opacity: 0, transform: "translateY(-12px) scale(.92)" }
+      ],
+      { duration: 280, easing: "ease-in" }
+    );
+    dismissal.onfinish = cleanup;
+  }, 3000);
+}
 
 function showPowerPopup(level, connected) {
   if (activeChargingPanel) {
