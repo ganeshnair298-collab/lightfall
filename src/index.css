@@ -23,6 +23,10 @@ body {
     pointer-events: none;
 }
 
+.glass-disabled #glassCanvas {
+    display: none;
+}
+
 .dynamic-island {
     position: absolute;
     top: -2px;
@@ -59,7 +63,7 @@ body {
 
 .dynamic-island.manager-expanded:hover {
     width: 460px;
-    height: 285px;
+    height: 330px;
 }
 
 .island-mini {
@@ -375,7 +379,7 @@ body {
     grid-template-rows: repeat(3, minmax(0, 1fr));
     gap: 7px;
     min-height: 0;
-    padding-top: 2px;
+    padding: 2px 0 10px;
 }
 
 .manager-card {
@@ -417,7 +421,7 @@ body {
     gap: 5px;
 }
 
-.manager-value-row > span,
+.manager-value-row>span,
 .manager-subvalue {
     overflow: hidden;
     color: rgba(255, 255, 255, .55);

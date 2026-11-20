@@ -4,6 +4,8 @@ const {
   desktopCapturer,
   screen,
   ipcMain,
+  Menu,
+  Tray,
   dialog,
   nativeImage,
   powerMonitor
@@ -16,6 +18,8 @@ const { pathToFileURL } = require("node:url");
 const os = require("node:os");
 
 let mainWindow;
+let tray;
+let pendingStartedPopup = false;
 let captureTimer;
 let batteryTimer;
 let mediaActivityTimer;
@@ -31,6 +35,86 @@ let systemMetricsRefreshInProgress = false;
 let systemTemperatureRefreshInProgress = false;
 let previousCpuTimes = null;
 let gpuDetailsPromise;
+let glassShaderEnabled = true;
+let preferencesPath;
+
+async function loadPreferences() {
+  try {
+    const preferences = JSON.parse(await fs.readFile(preferencesPath, "utf8"));
+    glassShaderEnabled = preferences.glassShaderEnabled !== false;
+  } catch (error) {
+    if (error.code !== "ENOENT") {
+      console.error("Unable to load Lightfall preferences:", error);
+    }
+  }
+}
+
+function updateTrayMenu() {
+  if (!tray) {
+    return;
+  }
+
+  tray.setContextMenu(Menu.buildFromTemplate([
+    {
+      label: "Show Lightfall",
+      click: () => {
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.show();
+          mainWindow.focus();
+          showStartedPopup();
+        }
+      }
+    },
+    {
+      label: "Glass Effect",
+      type: "checkbox",
+      checked: glassShaderEnabled,
+      click: (item) => {
+        glassShaderEnabled = item.checked;
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send("glass-shader:set-enabled", glassShaderEnabled);
+          if (glassShaderEnabled && !captureTimer) {
+            captureTimer = setInterval(captureDesktop, 100);
+          } else if (!glassShaderEnabled) {
+            clearInterval(captureTimer);
+            captureTimer = null;
+          }
+        }
+        fs.writeFile(preferencesPath, JSON.stringify({ glassShaderEnabled }, null, 2), "utf8")
+          .catch((error) => {
+            console.error("Unable to save Lightfall preferences:", error);
+          });
+      }
+    },
+    { type: "separator" },
+    {
+      label: "Exit Lightfall",
+      click: () => app.quit()
+    }
+  ]));
+}
+
+function showStartedPopup() {
+  if (!mainWindow || mainWindow.isDestroyed() || mainWindow.webContents.isLoading()) {
+    pendingStartedPopup = true;
+    return;
+  }
+
+  mainWindow.webContents.send("lightfall:started");
+}
+
+function createTray() {
+  tray = new Tray(path.join(__dirname, "..", "assets", "icon.ico"));
+  tray.setToolTip("Lightfall");
+  updateTrayMenu();
+  tray.on("click", () => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.show();
+      mainWindow.focus();
+      showStartedPopup();
+    }
+  });
+}
 
 function getSystemCpuTimes() {
   const cores = os.cpus();
@@ -1074,10 +1158,19 @@ function createWindow() {
     mainWindow.setContentProtection(true);
   }
 
-  mainWindow.loadFile(path.join(__dirname, "index.html"));
+  mainWindow.loadFile(path.join(__dirname, "index.html"), {
+    query: { glassShader: glassShaderEnabled ? "1" : "0" }
+  });
 
   mainWindow.webContents.once("did-finish-load", () => {
-    captureTimer = setInterval(captureDesktop, 100);
+    mainWindow.webContents.send("glass-shader:set-enabled", glassShaderEnabled);
+    if (pendingStartedPopup) {
+      pendingStartedPopup = false;
+      mainWindow.webContents.send("lightfall:started");
+    }
+    if (glassShaderEnabled) {
+      captureTimer = setInterval(captureDesktop, 100);
+    }
     batteryTimer = setInterval(refreshBatteryStatus, 10000);
     mediaActivityTimer = setInterval(refreshMediaActivity, 500);
     refreshMediaActivity();
@@ -1102,7 +1195,12 @@ function createWindow() {
   });
 }
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
+  preferencesPath = path.join(app.getPath("userData"), "preferences.json");
+  await loadPreferences();
+  createTray();
+  showStartedPopup();
+
   ipcMain.on("battery:refresh", refreshBatteryStatus);
   ipcMain.on("system-monitor:set-active", setSystemMonitorActive);
   ipcMain.handle("music:choose-files", async (event) => {

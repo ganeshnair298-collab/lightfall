@@ -68,6 +68,24 @@ contextBridge.exposeInMainWorld("lightfall", {
       ipcRenderer.removeListener("system:temperatures", listener);
     };
   },
+  onGlassShaderEnabled(callback) {
+    const listener = (_, enabled) => callback(enabled === true);
+
+    ipcRenderer.on("glass-shader:set-enabled", listener);
+
+    return () => {
+      ipcRenderer.removeListener("glass-shader:set-enabled", listener);
+    };
+  },
+  onLightfallStarted(callback) {
+    const listener = () => callback();
+
+    ipcRenderer.on("lightfall:started", listener);
+
+    return () => {
+      ipcRenderer.removeListener("lightfall:started", listener);
+    };
+  },
   setSystemMonitorActive(active) {
     ipcRenderer.send("system-monitor:set-active", active === true);
   },

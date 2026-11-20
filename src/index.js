@@ -1,3 +1,21 @@
+let glassAnimationFrame = null;
+let glassShaderEnabled = new URLSearchParams(window.location.search).get("glassShader") !== "0";
+document.body.classList.toggle("glass-disabled", !glassShaderEnabled);
+
+window.lightfall.onGlassShaderEnabled((enabled) => {
+  glassShaderEnabled = enabled;
+  document.body.classList.toggle("glass-disabled", !enabled);
+  if (enabled) {
+    resizeCanvas();
+    if (glassAnimationFrame === null) {
+      glassAnimationFrame = requestAnimationFrame(render);
+    }
+  } else if (glassAnimationFrame !== null) {
+    cancelAnimationFrame(glassAnimationFrame);
+    glassAnimationFrame = null;
+  }
+});
+
 const canvas = document.getElementById("glassCanvas");
 const gl = canvas.getContext("webgl", {
   alpha: true,
@@ -208,7 +226,7 @@ function updateIslandInputRegion(expanded) {
   const height = Number.isFinite(inlineHeight)
     ? inlineHeight
     : expanded
-      ? managerExpanded ? 285 : 170
+      ? managerExpanded ? 330 : 170
       : island.classList.contains("empty") ? 3 : 22;
   const x = Math.max(0, Math.floor((window.innerWidth - width) / 2));
 
@@ -326,6 +344,9 @@ window.lightfall.onMediaActivity((activity) => {
 const prefersReducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
 
 let activeChargingPanel;
+let activeStartedPanel;
+let activeStartedCleanup;
+let activeStartedTimeout;
 let inputRegionCollapseTimer;
 
 function collapseInputRegionAfterAnimation() {
@@ -336,7 +357,7 @@ function collapseInputRegionAfterAnimation() {
 
   if (island.matches(":hover")) {
     updateIslandInputRegion(true);
-  } else if (!activeChargingPanel && !activeMediaActivityPanel) {
+  } else if (!activeChargingPanel && !activeMediaActivityPanel && !activeStartedPanel) {
     updateIslandInputRegion(false);
   }
 }
@@ -649,6 +670,104 @@ function showPowerPopup(level, connected) {
   }, 3000);
 }
 
+function showStartedPopup() {
+  if (activeStartedCleanup) {
+    activeStartedCleanup();
+  }
+
+  const mini = island.querySelector(".island-mini");
+  const popup = island.querySelector(".island-popup");
+  const previousStyles = {
+    width: island.style.width,
+    height: island.style.height,
+    borderRadius: island.style.borderRadius,
+    opacity: island.style.opacity
+  };
+  const previousMiniVisibility = mini.style.visibility;
+  const previousPopupVisibility = popup.style.visibility;
+
+  const panel = document.createElement("div");
+  panel.setAttribute("role", "status");
+  panel.setAttribute("aria-live", "polite");
+  panel.style.cssText = "position:absolute;inset:0;z-index:3;display:flex;align-items:center;justify-content:center;gap:14px;padding:14px 22px;color:rgba(255,255,255,.96);pointer-events:none;opacity:0;transform:translateY(18px) scale(.9);";
+
+  const icon = document.createElement("span");
+  icon.setAttribute("aria-hidden", "true");
+  icon.textContent = "✦";
+  icon.style.cssText = "color:rgba(255,255,255,.85);font-size:20px;text-shadow:0 0 14px rgba(255,255,255,.55);";
+
+  const message = document.createElement("strong");
+  message.textContent = "lightfall has started";
+  message.style.cssText = "font-size:15px;letter-spacing:.5px;text-shadow:0 2px 14px rgba(255,255,255,.22);";
+
+  panel.append(icon, message);
+  island.appendChild(panel);
+  activeStartedPanel = panel;
+
+  mini.style.visibility = "hidden";
+  popup.style.visibility = "hidden";
+  island.style.width = "360px";
+  island.style.height = "84px";
+  island.style.borderRadius = "0 0 28px 28px";
+  island.style.opacity = "1";
+  updateIslandInputRegion(false);
+
+  const cleanup = () => {
+    if (activeStartedPanel !== panel) {
+      return;
+    }
+
+    clearTimeout(activeStartedTimeout);
+    panel.remove();
+    activeStartedPanel = null;
+    activeStartedCleanup = null;
+    mini.style.visibility = previousMiniVisibility;
+    popup.style.visibility = previousPopupVisibility;
+    island.style.width = previousStyles.width;
+    island.style.height = previousStyles.height;
+    island.style.borderRadius = previousStyles.borderRadius;
+    island.style.opacity = previousStyles.opacity;
+    if (island.matches(":hover")) {
+      updateIslandInputRegion(true);
+    } else {
+      scheduleInputRegionCollapse();
+    }
+  };
+  activeStartedCleanup = cleanup;
+
+  if (prefersReducedMotion.matches) {
+    panel.style.opacity = "1";
+    panel.style.transform = "translateY(0) scale(1)";
+  } else {
+    panel.animate(
+      [
+        { opacity: 0, transform: "translateY(18px) scale(.9)" },
+        { opacity: 1, transform: "translateY(-3px) scale(1.02)", offset: 0.75 },
+        { opacity: 1, transform: "translateY(0) scale(1)" }
+      ],
+      { duration: 480, easing: "cubic-bezier(.16, 1, .3, 1)", fill: "forwards" }
+    );
+  }
+
+  activeStartedTimeout = setTimeout(() => {
+    if (prefersReducedMotion.matches) {
+      cleanup();
+      return;
+    }
+
+    const dismissal = panel.animate(
+      [
+        { opacity: 1, transform: "translateY(0) scale(1)" },
+        { opacity: 0, transform: "translateY(-10px) scale(.94)" }
+      ],
+      { duration: 220, easing: "ease-in" }
+    );
+    dismissal.onfinish = cleanup;
+  }, 2200);
+}
+
+window.lightfall.onLightfallStarted(showStartedPopup);
+
 function handleBatteryStatus(status) {
   updateBatteryIndicator(status);
   if (!status || !Number.isFinite(status.level)) {
@@ -703,12 +822,14 @@ function render(time) {
     gl.drawArrays(gl.TRIANGLES, 0, 6);
   }
 
-  requestAnimationFrame(render);
+  glassAnimationFrame = requestAnimationFrame(render);
 }
 
 gl.enable(gl.BLEND);
 gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
-requestAnimationFrame(render);
+if (glassShaderEnabled) {
+  glassAnimationFrame = requestAnimationFrame(render);
+}
 
 // Audio and waveform player logic
 const audio = document.getElementById("audio");
