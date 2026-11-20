@@ -50,6 +50,27 @@ contextBridge.exposeInMainWorld("lightfall", {
       ipcRenderer.removeListener("media:activity", listener);
     };
   },
+  onSystemMetrics(callback) {
+    const listener = (_, metrics) => callback(metrics);
+
+    ipcRenderer.on("system:metrics", listener);
+
+    return () => {
+      ipcRenderer.removeListener("system:metrics", listener);
+    };
+  },
+  onSystemTemperatures(callback) {
+    const listener = (_, temperatures) => callback(temperatures);
+
+    ipcRenderer.on("system:temperatures", listener);
+
+    return () => {
+      ipcRenderer.removeListener("system:temperatures", listener);
+    };
+  },
+  setSystemMonitorActive(active) {
+    ipcRenderer.send("system-monitor:set-active", active === true);
+  },
   requestBatteryStatus() {
     ipcRenderer.send("battery:refresh");
   },

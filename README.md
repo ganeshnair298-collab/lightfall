@@ -29,6 +29,7 @@ The interface stays minimal until you need it: hover over the top-edge island to
 - **Live refractive backdrop** that reflects a captured view of the desktop
 - **Dynamic expansion** with smooth, responsive hover animations
 - **Compact mini-player** for discreet playback and progress tracking
+- **System Manager tab** with live CPU and RAM usage, GPU model/driver details, ACPI temperature sensors, NVIDIA GPU temperature when available, and Lightfall process usage
 - **Charging pop-ups** with clear power-state notifications
 - **Camera activity pop-ups** when an app starts or stops using the webcam
 - **Adaptive battery indicator** with charging status
@@ -79,8 +80,8 @@ Lightfall uses the native HTML audio engine and supports the file types offered 
 1. Launch **Lightfall**.
 2. Click the album-art area or press **Ctrl+O**.
 3. Select one or more local audio files.
-4. Hover over the top island to expand the complete player.
-5. Use the controls or keyboard shortcuts to manage playback.
+4. Hover over the top island to expand it, then switch between **Music** and **Manager**.
+5. Use the Music controls or keyboard shortcuts to manage playback; Manager metrics refresh while that tab is visible.
 
 ### Keyboard Shortcuts
 

@@ -13,16 +13,300 @@ const fs = require("node:fs/promises");
 const { execFile } = require("node:child_process");
 const path = require("node:path");
 const { pathToFileURL } = require("node:url");
+const os = require("node:os");
 
 let mainWindow;
 let captureTimer;
 let batteryTimer;
 let mediaActivityTimer;
+let systemMetricsTimer;
+let systemTemperatureTimer;
 let mediaActivityRefreshInProgress = false;
 let previousMediaActivity = null;
 let batteryRefreshInProgress = false;
 let batteryRefreshPending = false;
 let pendingPowerEvent = null;
+let systemMetricsActive = false;
+let systemMetricsRefreshInProgress = false;
+let systemTemperatureRefreshInProgress = false;
+let previousCpuTimes = null;
+let gpuDetailsPromise;
+
+function getSystemCpuTimes() {
+  const cores = os.cpus();
+  return {
+    coreCount: cores.length,
+    model: cores[0] ? cores[0].model : "",
+    speedMhz: cores[0] ? cores[0].speed : 0,
+    idle: cores.reduce((total, core) => total + core.times.idle, 0),
+    total: cores.reduce(
+      (total, core) => total + Object.values(core.times).reduce((sum, time) => sum + time, 0),
+      0
+    )
+  };
+}
+
+async function getGpuDetails() {
+  if (!gpuDetailsPromise) {
+    gpuDetailsPromise = app.getGPUInfo("basic").then((info) => {
+      const devices = info && typeof info === "object" && Array.isArray(info.gpuDevice)
+        ? info.gpuDevice
+        : [];
+      const activeDevice = devices.find((device) =>
+        device && typeof device === "object" && device.active
+      ) || devices.find((device) => device && typeof device === "object");
+
+      return {
+        name: activeDevice && typeof activeDevice.deviceString === "string"
+          ? activeDevice.deviceString
+          : "Graphics adapter",
+        vendor: activeDevice && typeof activeDevice.vendorString === "string"
+          ? activeDevice.vendorString
+          : "",
+        driver: activeDevice && typeof activeDevice.driverVersion === "string"
+          ? activeDevice.driverVersion
+          : "Driver details unavailable"
+      };
+    }).catch((error) => {
+      console.error("Unable to read GPU details:", error);
+      return {
+        name: "GPU details unavailable",
+        vendor: "",
+        driver: "Check graphics settings"
+      };
+    });
+  }
+
+  return gpuDetailsPromise;
+}
+
+function readCpuTemperature() {
+  if (process.platform !== "win32") {
+    return Promise.resolve({
+      value: null,
+      source: "ACPI thermal sensors are available on Windows only"
+    });
+  }
+
+  const command = "$zones = Get-CimInstance -Namespace root\\wmi -ClassName MSAcpi_ThermalZoneTemperature -ErrorAction SilentlyContinue; $values = @($zones | ForEach-Object { if ($_.CurrentTemperature -gt 0) { [math]::Round(($_.CurrentTemperature / 10) - 273.15, 1) } } | Where-Object { $_ -ge 0 -and $_ -le 120 }); if ($values.Count -gt 0) { ($values | Measure-Object -Maximum).Maximum } else { 'null' }";
+
+  return new Promise((resolve) => {
+    execFile(
+      "powershell.exe",
+      ["-NoProfile", "-NonInteractive", "-Command", command],
+      { windowsHide: true, timeout: 5000 },
+      (error, stdout) => {
+        if (error) {
+          console.error("Unable to read ACPI thermal sensors:", error);
+          resolve({
+            value: null,
+            source: "ACPI thermal sensor unavailable"
+          });
+          return;
+        }
+
+        const output = stdout.trim();
+        const value = output ? Number(output) : NaN;
+        resolve(Number.isFinite(value) && value >= 0 && value <= 120
+          ? {
+            value,
+            source: "ACPI system sensor; may differ from CPU package temperature"
+          }
+          : {
+            value: null,
+            source: "No ACPI thermal sensor exposed by this device"
+          });
+      }
+    );
+  });
+}
+
+async function readGpuTemperature() {
+  const gpu = await getGpuDetails();
+  if (!/nvidia/i.test(`${gpu.vendor} ${gpu.name}`)) {
+    return {
+      value: null,
+      source: "Temperature is not exposed by this GPU driver"
+    };
+  }
+
+  return new Promise((resolve) => {
+    execFile(
+      "nvidia-smi.exe",
+      ["--query-gpu=temperature.gpu", "--format=csv,noheader,nounits"],
+      { windowsHide: true, timeout: 3000 },
+      (error, stdout) => {
+        if (error) {
+          if (error.code !== "ENOENT") {
+            console.error("Unable to read NVIDIA GPU temperature:", error);
+          }
+          resolve({
+            value: null,
+            source: "NVIDIA temperature telemetry unavailable"
+          });
+          return;
+        }
+
+        const values = stdout.split(/\r?\n/)
+          .map((line) => line.trim())
+          .filter(Boolean)
+          .map(Number)
+          .filter((value) => Number.isFinite(value) && value >= 0 && value <= 150);
+        resolve(values.length > 0
+          ? {
+            value: Math.max(...values),
+            source: "NVIDIA driver telemetry"
+          }
+          : {
+            value: null,
+            source: "NVIDIA temperature telemetry unavailable"
+          });
+      }
+    );
+  });
+}
+
+async function refreshSystemTemperatures() {
+  if (
+    !systemMetricsActive ||
+    !mainWindow ||
+    mainWindow.isDestroyed() ||
+    systemTemperatureRefreshInProgress
+  ) {
+    return;
+  }
+
+  systemTemperatureRefreshInProgress = true;
+  try {
+    const [cpu, gpu] = await Promise.all([
+      readCpuTemperature(),
+      readGpuTemperature()
+    ]);
+
+    if (systemMetricsActive && mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send("system:temperatures", {
+        cpuC: cpu.value,
+        cpuSource: cpu.source,
+        gpuC: gpu.value,
+        gpuSource: gpu.source
+      });
+    }
+  } catch (error) {
+    console.error("Unable to read system temperatures:", error);
+    if (systemMetricsActive && mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send("system:temperatures", {
+        cpuC: null,
+        cpuSource: "Temperature sensors unavailable",
+        gpuC: null,
+        gpuSource: "Temperature sensors unavailable"
+      });
+    }
+  } finally {
+    systemTemperatureRefreshInProgress = false;
+  }
+}
+
+async function refreshSystemMetrics() {
+  if (
+    !systemMetricsActive ||
+    !mainWindow ||
+    mainWindow.isDestroyed() ||
+    systemMetricsRefreshInProgress
+  ) {
+    return;
+  }
+
+  systemMetricsRefreshInProgress = true;
+  try {
+    const cpuTimes = getSystemCpuTimes();
+    let systemCpuPercent = null;
+    if (previousCpuTimes) {
+      const totalDelta = cpuTimes.total - previousCpuTimes.total;
+      const idleDelta = cpuTimes.idle - previousCpuTimes.idle;
+      if (totalDelta > 0) {
+        systemCpuPercent = Math.max(0, Math.min(100, (1 - idleDelta / totalDelta) * 100));
+      }
+    }
+    previousCpuTimes = cpuTimes;
+
+    const processes = app.getAppMetrics();
+    const appCpuPercent = cpuTimes.coreCount
+      ? processes.reduce(
+        (total, processMetric) => total + (
+          Number.isFinite(processMetric.cpu.percentCPUUsage)
+            ? processMetric.cpu.percentCPUUsage
+            : 0
+        ),
+        0
+      ) / cpuTimes.coreCount
+      : 0;
+    const appMemoryBytes = processes.reduce(
+      (total, processMetric) => total + (
+        Number.isFinite(processMetric.memory.workingSetSize)
+          ? processMetric.memory.workingSetSize * 1024
+          : 0
+      ),
+      0
+    );
+    const gpu = await getGpuDetails();
+
+    if (systemMetricsActive && mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send("system:metrics", {
+        systemCpuPercent,
+        appCpuPercent: Math.max(0, Math.min(100, appCpuPercent)),
+        totalMemoryBytes: os.totalmem(),
+        freeMemoryBytes: os.freemem(),
+        appMemoryBytes,
+        processCount: processes.length,
+        cpuModel: cpuTimes.model,
+        logicalCoreCount: cpuTimes.coreCount,
+        cpuSpeedMhz: cpuTimes.speedMhz,
+        gpu
+      });
+    }
+  } catch (error) {
+    console.error("Unable to read system metrics:", error);
+    if (systemMetricsActive && mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send("system:metrics", {
+        error: "System usage is unavailable."
+      });
+    }
+  } finally {
+    systemMetricsRefreshInProgress = false;
+  }
+}
+
+function setSystemMonitorActive(event, active) {
+  if (
+    !mainWindow ||
+    mainWindow.isDestroyed() ||
+    event.sender !== mainWindow.webContents ||
+    typeof active !== "boolean"
+  ) {
+    return;
+  }
+
+  if (!active) {
+    systemMetricsActive = false;
+    clearInterval(systemMetricsTimer);
+    clearInterval(systemTemperatureTimer);
+    systemMetricsTimer = null;
+    systemTemperatureTimer = null;
+    previousCpuTimes = null;
+    return;
+  }
+
+  if (systemMetricsTimer) {
+    return;
+  }
+
+  systemMetricsActive = true;
+  previousCpuTimes = null;
+  refreshSystemMetrics();
+  refreshSystemTemperatures();
+  systemMetricsTimer = setInterval(refreshSystemMetrics, 1000);
+  systemTemperatureTimer = setInterval(refreshSystemTemperatures, 15000);
+}
 
 function notifyPowerState(eventName) {
   if (!mainWindow || mainWindow.isDestroyed()) {
@@ -809,12 +1093,18 @@ function createWindow() {
     clearInterval(captureTimer);
     clearInterval(batteryTimer);
     clearInterval(mediaActivityTimer);
+    clearInterval(systemMetricsTimer);
+    clearInterval(systemTemperatureTimer);
+    systemMetricsTimer = null;
+    systemTemperatureTimer = null;
+    systemMetricsActive = false;
     mainWindow = null;
   });
 }
 
 app.whenReady().then(() => {
   ipcMain.on("battery:refresh", refreshBatteryStatus);
+  ipcMain.on("system-monitor:set-active", setSystemMonitorActive);
   ipcMain.handle("music:choose-files", async (event) => {
     if (!mainWindow || mainWindow.isDestroyed() || event.sender !== mainWindow.webContents) {
       throw new Error("Music files can only be opened by the main application window.");
@@ -876,6 +1166,8 @@ app.on("before-quit", () => {
   clearInterval(captureTimer);
   clearInterval(batteryTimer);
   clearInterval(mediaActivityTimer);
+  clearInterval(systemMetricsTimer);
+  clearInterval(systemTemperatureTimer);
 });
 
 app.on("window-all-closed", () => {

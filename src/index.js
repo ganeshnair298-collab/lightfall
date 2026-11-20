@@ -201,13 +201,14 @@ resizeCanvas();
 
 const island = document.getElementById("dynamicIsland");
 function updateIslandInputRegion(expanded) {
+  const managerExpanded = expanded && island.classList.contains("manager-expanded");
   const inlineWidth = Number.parseFloat(island.style.width);
   const inlineHeight = Number.parseFloat(island.style.height);
-  const width = Number.isFinite(inlineWidth) ? inlineWidth : expanded ? 420 : 175;
+  const width = Number.isFinite(inlineWidth) ? inlineWidth : expanded ? managerExpanded ? 460 : 420 : 175;
   const height = Number.isFinite(inlineHeight)
     ? inlineHeight
     : expanded
-      ? 170
+      ? managerExpanded ? 285 : 170
       : island.classList.contains("empty") ? 3 : 22;
   const x = Math.max(0, Math.floor((window.innerWidth - width) / 2));
 
@@ -669,11 +670,15 @@ island.addEventListener("pointerenter", () => {
     inputRegionCollapseTimer = null;
   }
   updateIslandInputRegion(true);
+  updateSystemMonitorVisibility();
   animatePopup();
   window.lightfall.requestBatteryStatus();
 });
 
-island.addEventListener("pointerleave", scheduleInputRegionCollapse);
+island.addEventListener("pointerleave", () => {
+  scheduleInputRegionCollapse();
+  updateSystemMonitorVisibility();
+});
 
 // Live-Synced Render Loop
 function render(time) {
@@ -723,6 +728,118 @@ const favorites = new Set();
 let currentTrackIndex = -1;
 let shuffleEnabled = false;
 let repeatMode = "off";
+let managerSelected = false;
+
+const musicTab = document.getElementById("musicTab");
+const managerTab = document.getElementById("managerTab");
+const musicView = document.getElementById("musicView");
+const managerView = document.getElementById("managerView");
+const sectionLabel = document.getElementById("sectionLabel");
+const systemCpuValue = document.getElementById("systemCpuValue");
+const appCpuValue = document.getElementById("appCpuValue");
+const cpuMeter = document.getElementById("cpuMeter");
+const systemMemoryValue = document.getElementById("systemMemoryValue");
+const cpuDetails = document.getElementById("cpuDetails");
+const memoryDetails = document.getElementById("memoryDetails");
+const memoryMeter = document.getElementById("memoryMeter");
+const gpuName = document.getElementById("gpuName");
+const gpuDriver = document.getElementById("gpuDriver");
+const cpuTempValue = document.getElementById("cpuTempValue");
+const cpuTempSource = document.getElementById("cpuTempSource");
+const gpuTempValue = document.getElementById("gpuTempValue");
+const gpuTempSource = document.getElementById("gpuTempSource");
+const appMemoryValue = document.getElementById("appMemoryValue");
+const appProcessValue = document.getElementById("appProcessValue");
+
+function updateSystemMonitorVisibility() {
+  window.lightfall.setSystemMonitorActive(managerSelected && island.matches(":hover"));
+}
+
+function selectIslandView(view) {
+  managerSelected = view === "manager";
+  island.classList.toggle("manager-expanded", managerSelected);
+  musicTab.classList.toggle("active", !managerSelected);
+  managerTab.classList.toggle("active", managerSelected);
+  musicTab.setAttribute("aria-selected", String(!managerSelected));
+  managerTab.setAttribute("aria-selected", String(managerSelected));
+  musicView.hidden = managerSelected;
+  managerView.hidden = !managerSelected;
+  sectionLabel.textContent = managerSelected ? "SYSTEM MANAGER" : "NOW PLAYING";
+  closeSongButton.hidden = managerSelected || playlist.length === 0;
+  updateIslandInputRegion(island.matches(":hover"));
+  updateSystemMonitorVisibility();
+}
+
+function updateSystemMetrics(metrics) {
+  if (metrics.error) {
+    systemCpuValue.textContent = "N/A";
+    appCpuValue.textContent = "APP N/A";
+    cpuMeter.style.width = "0";
+    systemMemoryValue.textContent = "N/A";
+    memoryMeter.style.width = "0";
+    cpuDetails.textContent = metrics.error;
+    memoryDetails.textContent = metrics.error;
+    gpuName.textContent = "GPU unavailable";
+    gpuDriver.textContent = metrics.error;
+    appMemoryValue.textContent = "N/A";
+    appProcessValue.textContent = "System usage unavailable";
+    return;
+  }
+
+  const systemCpu = Number.isFinite(metrics.systemCpuPercent) ? metrics.systemCpuPercent : null;
+  const appCpu = Number.isFinite(metrics.appCpuPercent) ? metrics.appCpuPercent : null;
+  const totalMemory = Number(metrics.totalMemoryBytes);
+  const freeMemory = Number(metrics.freeMemoryBytes);
+  const usedMemory = totalMemory - freeMemory;
+  const memoryValid = Number.isFinite(totalMemory) && totalMemory > 0 && Number.isFinite(usedMemory);
+
+  systemCpuValue.textContent = systemCpu === null ? "--%" : `${systemCpu.toFixed(0)}%`;
+  appCpuValue.textContent = appCpu === null ? "APP --%" : `APP ${appCpu.toFixed(1)}%`;
+  cpuMeter.style.width = systemCpu === null ? "0" : `${systemCpu}%`;
+  cpuDetails.textContent = metrics.cpuModel
+    ? `${metrics.logicalCoreCount} threads · ${metrics.cpuSpeedMhz || "--"} MHz · ${metrics.cpuModel}`
+    : `${metrics.logicalCoreCount || "--"} logical processors`;
+  cpuDetails.title = cpuDetails.textContent;
+
+  systemMemoryValue.textContent = memoryValid
+    ? `${(usedMemory / 1024 ** 3).toFixed(1)} / ${(totalMemory / 1024 ** 3).toFixed(1)} GB`
+    : "N/A";
+  memoryDetails.textContent = memoryValid
+    ? `${(freeMemory / 1024 ** 3).toFixed(1)} GB available`
+    : "Memory details unavailable";
+  memoryMeter.style.width = memoryValid
+    ? `${Math.max(0, Math.min(100, usedMemory / totalMemory * 100))}%`
+    : "0";
+
+  const gpu = metrics.gpu || {};
+  const gpuModel = typeof gpu.name === "string" ? gpu.name : "";
+  const gpuVendor = typeof gpu.vendor === "string" ? gpu.vendor : "";
+  gpuName.textContent = gpuVendor && !gpuModel.toLowerCase().includes(gpuVendor.toLowerCase())
+    ? `${gpuVendor} ${gpuModel}`
+    : gpuModel || "GPU unavailable";
+  gpuName.title = gpuName.textContent;
+  gpuDriver.textContent = gpu.driver || "Driver details unavailable";
+  appMemoryValue.textContent = Number.isFinite(metrics.appMemoryBytes)
+    ? `${(metrics.appMemoryBytes / 1024 ** 2).toFixed(0)} MB`
+    : "N/A";
+  appProcessValue.textContent = `App memory · ${appCpu === null ? "--" : appCpu.toFixed(1)}% CPU · ${metrics.processCount || 0} processes`;
+}
+
+function updateSystemTemperatures(temperatures) {
+  cpuTempValue.textContent = Number.isFinite(temperatures.cpuC)
+    ? `${temperatures.cpuC.toFixed(0)}°C`
+    : "N/A";
+  cpuTempSource.textContent = temperatures.cpuSource || "ACPI sensor unavailable";
+  gpuTempValue.textContent = Number.isFinite(temperatures.gpuC)
+    ? `${temperatures.gpuC.toFixed(0)}°C`
+    : "N/A";
+  gpuTempSource.textContent = temperatures.gpuSource || "Not exposed by this GPU driver";
+}
+
+musicTab.addEventListener("click", () => selectIslandView("music"));
+managerTab.addEventListener("click", () => selectIslandView("manager"));
+window.lightfall.onSystemMetrics(updateSystemMetrics);
+window.lightfall.onSystemTemperatures(updateSystemTemperatures);
 
 const miniPlayButton = document.createElement("button");
 miniPlayButton.type = "button";
@@ -869,7 +986,7 @@ function playTrack(index, autoplay) {
 
   const track = playlist[index];
   currentTrackIndex = index;
-  closeSongButton.hidden = false;
+  closeSongButton.hidden = managerSelected;
   miniCloseButton.hidden = false;
   audio.pause();
   audio.src = track.url;
@@ -899,7 +1016,7 @@ function addMusicFiles(tracks) {
   const firstTrackIndex = playlist.length;
   playlist.push(...validTracks);
   island.classList.remove("empty");
-  closeSongButton.hidden = false;
+  closeSongButton.hidden = managerSelected;
   if (!island.matches(":hover")) {
     updateIslandInputRegion(false);
   }
